@@ -20,11 +20,15 @@ import spock.lang.Specification;
 
 class EventingS3ObjectKeyLoaderSpec extends Specification {
   def "should build object key"() {
-    expect:
-    EventingS3ObjectKeyLoader.buildObjectKey(
+    when:
+    def keyWithObjectType = EventingS3ObjectKeyLoader.buildObjectKey(
       "my/root/",
       "my/root/tags/aws%3Aservergroup%3Amy_asg-v720/entity-tags-metadata.json"
-    ) == "aws:servergroup:my_asg-v720"
+    )
+
+    then:
+    keyWithObjectType.key == "aws:servergroup:my_asg-v720"
+    keyWithObjectType.objectType == ObjectType.ENTITY_TAGS
   }
 }
 
