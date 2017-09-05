@@ -25,6 +25,8 @@ import com.netflix.spinnaker.front50.model.serviceaccount.ServiceAccount;
 import com.netflix.spinnaker.front50.model.snapshot.Snapshot;
 import com.netflix.spinnaker.front50.model.tag.EntityTags;
 
+import java.util.Map;
+
 public enum ObjectType {
   PROJECT(Project.class, "projects", "project-metadata.json"),
   PIPELINE(Pipeline.class, "pipelines", "pipeline-metadata.json"),

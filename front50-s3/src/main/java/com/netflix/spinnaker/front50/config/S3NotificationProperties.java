@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Netflix, Inc.
+ * Copyright 2017 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,16 @@
  * limitations under the License.
  */
 
+package com.netflix.spinnaker.front50.config;
 
-package com.netflix.spinnaker.front50.model.tag
+public class S3NotificationProperties {
+  String snsTopicArn;
 
-import com.netflix.spinnaker.front50.model.ItemDAO
+  public String getSnsTopicArn() {
+    return snsTopicArn;
+  }
 
-interface EntityTagsDAO extends ItemDAO<EntityTags> {
+  public void setSnsTopicArn(String snsTopicArn) {
+    this.snsTopicArn = snsTopicArn;
+  }
 }

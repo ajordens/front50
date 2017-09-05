@@ -8,10 +8,17 @@ import com.amazonaws.regions.Regions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
 import com.amazonaws.services.s3.S3ClientOptions;
+import com.amazonaws.services.sns.AmazonSNS;
+import com.amazonaws.services.sns.AmazonSNSClientBuilder;
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.AmazonSQSClientBuilder;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.netflix.awsobjectmapper.AmazonObjectMapperConfigurer;
 import com.netflix.spinnaker.clouddriver.aws.bastion.BastionConfig;
 import com.netflix.spinnaker.clouddriver.aws.security.AmazonClientProvider;
+import com.netflix.spinnaker.front50.model.DefaultS3ObjectKeyLoader;
+import com.netflix.spinnaker.front50.model.EventingS3ObjectKeyLoader;
+import com.netflix.spinnaker.front50.model.ObjectKeyLoader;
 import com.netflix.spinnaker.front50.model.S3StorageService;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
@@ -19,6 +26,7 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Import;
+import org.springframework.scheduling.TaskScheduler;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Optional;
@@ -65,18 +73,77 @@ public class S3Config extends CommonStorageServiceDAOConfig {
   }
 
   @Bean
+  public AmazonSQS awsSQSClient(AWSCredentialsProvider awsCredentialsProvider, S3Properties s3Properties) {
+    ClientConfiguration clientConfiguration = new ClientConfiguration();
+
+    return AmazonSQSClientBuilder
+      .standard()
+      .withCredentials(awsCredentialsProvider)
+      .withClientConfiguration(clientConfiguration)
+      .withRegion(s3Properties.getRegion())
+      .build();
+  }
+
+  @Bean
+  public AmazonSNS awsSNSClient(AWSCredentialsProvider awsCredentialsProvider, S3Properties s3Properties) {
+    ClientConfiguration clientConfiguration = new ClientConfiguration();
+
+    return AmazonSNSClientBuilder
+      .standard()
+      .withCredentials(awsCredentialsProvider)
+      .withClientConfiguration(clientConfiguration)
+      .withRegion(s3Properties.getRegion())
+      .build();
+  }
+
+  @Bean
   @ConditionalOnMissingBean(RestTemplate.class)
   public RestTemplate restTemplate() {
     return new RestTemplate();
   }
 
   @Bean
-  public S3StorageService s3StorageService(AmazonS3 amazonS3, S3Properties s3Properties) {
+  public S3StorageService s3StorageService(TaskScheduler taskScheduler,
+                                           AmazonS3 amazonS3,
+                                           AmazonSQS amazonSQS,
+                                           AmazonSNS amazonSNS,
+                                           S3Properties s3Properties) {
     ObjectMapper awsObjectMapper = new ObjectMapper();
     AmazonObjectMapperConfigurer.configure(awsObjectMapper);
 
-    S3StorageService service = new S3StorageService(awsObjectMapper, amazonS3, s3Properties.getBucket(), s3Properties.getRootFolder(), s3Properties.isFailoverEnabled(), s3Properties.getRegion());
+    ObjectKeyLoader objectKeyLoader = new DefaultS3ObjectKeyLoader(
+      amazonS3,
+      s3Properties.getBucket(),
+      s3Properties.getRootFolder()
+    );
+
+    if (s3Properties.areNotificationsEnabled()) {
+      objectKeyLoader = new EventingS3ObjectKeyLoader(
+        taskScheduler,
+        awsObjectMapper,
+        amazonS3,
+        amazonSQS,
+        amazonSNS,
+        (DefaultS3ObjectKeyLoader) objectKeyLoader,
+        s3Properties.getRootFolder(),
+        s3Properties.getNotifications().getSnsTopicArn()
+      );
+    }
+
+    S3StorageService service = new S3StorageService(
+      awsObjectMapper,
+      amazonS3,
+      amazonSQS,
+      amazonSNS,
+      objectKeyLoader,
+      s3Properties.getBucket(),
+      s3Properties.getRootFolder(),
+      s3Properties.isFailoverEnabled(),
+      s3Properties.getRegion()
+    );
     service.ensureBucketExists();
+
     return service;
   }
 }
+

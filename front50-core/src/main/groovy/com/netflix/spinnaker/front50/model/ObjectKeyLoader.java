@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Netflix, Inc.
+ * Copyright 2017 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,12 @@
  * limitations under the License.
  */
 
+package com.netflix.spinnaker.front50.model;
 
-package com.netflix.spinnaker.front50.model.tag
+import java.util.Map;
 
-import com.netflix.spinnaker.front50.model.ItemDAO
+public interface ObjectKeyLoader {
+  Map<String, Long> listObjectKeys(ObjectType objectType);
 
-interface EntityTagsDAO extends ItemDAO<EntityTags> {
+  void shutdown();
 }

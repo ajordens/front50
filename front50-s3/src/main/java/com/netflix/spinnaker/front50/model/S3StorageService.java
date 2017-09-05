@@ -17,8 +17,19 @@
 package com.netflix.spinnaker.front50.model;
 
 import com.amazonaws.AmazonServiceException;
+import com.amazonaws.auth.policy.Condition;
+import com.amazonaws.auth.policy.Policy;
+import com.amazonaws.auth.policy.Principal;
+import com.amazonaws.auth.policy.Resource;
+import com.amazonaws.auth.policy.Statement;
+import com.amazonaws.auth.policy.actions.SQSActions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.*;
+import com.amazonaws.services.sns.AmazonSNS;
+import com.amazonaws.services.sqs.AmazonSQS;
+import com.amazonaws.services.sqs.model.ReceiptHandleIsInvalidException;
+import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
+import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import com.amazonaws.util.StringUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -28,6 +39,7 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.PreDestroy;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.time.Duration;
@@ -39,23 +51,38 @@ public class S3StorageService implements StorageService {
 
   private final ObjectMapper objectMapper;
   private final AmazonS3 amazonS3;
+  private final AmazonSQS amazonSQS;
+  private final AmazonSNS amazonSNS;
   private final String bucket;
   private final String rootFolder;
   private final Boolean readOnlyMode;
   private final String region;
 
+  private final ObjectKeyLoader objectKeyLoader;
+
   public S3StorageService(ObjectMapper objectMapper,
                           AmazonS3 amazonS3,
+                          AmazonSQS amazonSQS,
+                          AmazonSNS amazonSNS,
+                          ObjectKeyLoader objectKeyLoader,
                           String bucket,
                           String rootFolder,
                           Boolean readOnlyMode,
                           String region) {
     this.objectMapper = objectMapper;
     this.amazonS3 = amazonS3;
+    this.amazonSQS = amazonSQS;
+    this.amazonSNS = amazonSNS;
+    this.objectKeyLoader = objectKeyLoader;
     this.bucket = bucket;
     this.rootFolder = rootFolder;
     this.readOnlyMode = readOnlyMode;
     this.region = region;
+  }
+
+  @PreDestroy
+  void shutdown() {
+    objectKeyLoader.shutdown();
   }
 
   @Override
@@ -75,10 +102,10 @@ public class S3StorageService implements StorageService {
 
         log.info("Enabling versioning of the S3 bucket " + bucket);
         BucketVersioningConfiguration configuration =
-            new BucketVersioningConfiguration().withStatus("Enabled");
+          new BucketVersioningConfiguration().withStatus("Enabled");
 
         SetBucketVersioningConfigurationRequest setBucketVersioningConfigurationRequest =
-            new SetBucketVersioningConfigurationRequest(bucket, configuration);
+          new SetBucketVersioningConfigurationRequest(bucket, configuration);
 
         amazonS3.setBucketVersioningConfiguration(setBucketVersioningConfigurationRequest);
 
@@ -91,29 +118,6 @@ public class S3StorageService implements StorageService {
   @Override
   public boolean supportsVersioning() {
     return true;
-  }
-
-  @Override
-  public <T extends Timestamped> Collection<T> loadObjectsWithPrefix(ObjectType objectType, String prefix, int maxResults) {
-    ObjectListing bucketListing = amazonS3.listObjects(
-      new ListObjectsRequest(bucket, (buildTypedFolder(rootFolder, objectType.group) + "/" + prefix).toLowerCase(), null, null, maxResults)
-    );
-    List<S3ObjectSummary> summaries = bucketListing.getObjectSummaries();
-
-    // TODO-AJ this is naive and inefficient
-    return summaries.stream()
-      .map(s3ObjectSummary -> amazonS3.getObject(s3ObjectSummary.getBucketName(), s3ObjectSummary.getKey()))
-      .map(s3Object -> {
-        T item = null;
-        try {
-          item = deserialize(s3Object, (Class<T>) objectType.clazz);
-          item.setLastModified(s3Object.getObjectMetadata().getLastModified().getTime());
-        } catch (IOException e) {
-          // do nothing
-        }
-        return item;
-      })
-      .collect(Collectors.toSet());
   }
 
   @Override
@@ -169,23 +173,7 @@ public class S3StorageService implements StorageService {
 
   @Override
   public Map<String, Long> listObjectKeys(ObjectType objectType) {
-    long startTime = System.currentTimeMillis();
-    ObjectListing bucketListing = amazonS3.listObjects(
-      new ListObjectsRequest(bucket, buildTypedFolder(rootFolder, objectType.group), null, null, 10000)
-    );
-    List<S3ObjectSummary> summaries = bucketListing.getObjectSummaries();
-
-    while (bucketListing.isTruncated()) {
-      bucketListing = amazonS3.listNextBatchOfObjects(bucketListing);
-      summaries.addAll(bucketListing.getObjectSummaries());
-    }
-
-    log.debug("Took {}ms to fetch {} object keys for {}", (System.currentTimeMillis() - startTime), summaries.size(), objectType);
-
-    return summaries
-      .stream()
-      .filter(s -> filterS3ObjectSummary(s, objectType.defaultMetadataFilename))
-      .collect(Collectors.toMap((s -> buildObjectKey(objectType, s.getKey())), (s -> s.getLastModified().getTime())));
+    return objectKeyLoader.listObjectKeys(objectType);
   }
 
   @Override
@@ -269,10 +257,6 @@ public class S3StorageService implements StorageService {
     return objectMapper.readValue(s3Object.getObjectContent(), clazz);
   }
 
-  private boolean filterS3ObjectSummary(S3ObjectSummary s3ObjectSummary, String metadataFilename) {
-    return s3ObjectSummary.getKey().endsWith(metadataFilename);
-  }
-
   private String buildS3Key(String group, String objectKey, String metadataFilename) {
     if (objectKey.endsWith(metadataFilename)) {
       return objectKey;
@@ -281,13 +265,7 @@ public class S3StorageService implements StorageService {
     return (buildTypedFolder(rootFolder, group) + "/" + objectKey.toLowerCase() + "/" + metadataFilename).replace("//", "/");
   }
 
-  private String buildObjectKey(ObjectType objectType, String s3Key) {
-    return s3Key
-      .replaceAll(buildTypedFolder(rootFolder, objectType.group) + "/", "")
-      .replaceAll("/" + objectType.defaultMetadataFilename, "");
-  }
-
-  private String buildTypedFolder(String rootFolder, String type) {
+  static String buildTypedFolder(String rootFolder, String type) {
     return (rootFolder + "/" + type).replaceAll("//", "/");
   }
 }

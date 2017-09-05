@@ -15,9 +15,6 @@
  */
 package com.netflix.spinnaker.front50.model;
 
-import com.google.common.cache.CacheBuilder;
-import com.google.common.cache.CacheLoader;
-import com.google.common.cache.LoadingCache;
 import com.netflix.hystrix.exception.HystrixRuntimeException;
 import com.netflix.spectator.api.Counter;
 import com.netflix.spectator.api.Registry;
@@ -32,7 +29,6 @@ import rx.Scheduler;
 
 import javax.annotation.PostConstruct;
 import java.util.*;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -60,8 +56,6 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
 
   private final AtomicLong lastRefreshedTime = new AtomicLong();
 
-  private final LoadingCache<Long, Map<String, Long>> objectKeysByLastModifiedCache;
-
   public StorageServiceSupport(ObjectType objectType,
                                StorageService service,
                                Scheduler scheduler,
@@ -77,24 +71,6 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
     }
     this.shouldWarmCache = shouldWarmCache;
     this.registry = registry;
-
-    // cache object keys for at least two refresh intervals
-    // (will ensure that concurrent requests are debounced across a refresh cycle)
-    long cacheExpiry = refreshIntervalMs * 2;
-    log.debug("Creating object keys cache (expiry: {} minutes)", TimeUnit.MILLISECONDS.toMinutes(cacheExpiry));
-    this.objectKeysByLastModifiedCache = CacheBuilder
-      .newBuilder()
-      .expireAfterWrite(cacheExpiry, TimeUnit.MILLISECONDS)
-      .recordStats()
-      .build(
-        new CacheLoader<Long, Map<String, Long>>() {
-          @Override
-          public Map<String, Long> load(Long lastModified) throws Exception {
-            log.debug("Cache miss! Fetching all object keys (lastModified: {})", new Date(lastModified));
-            return service.listObjectKeys(objectType);
-          }
-        }
-      );
 
     String typeName = objectType.name();
     this.cacheRefreshTimer = registry.timer(
@@ -173,10 +149,6 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
     }
 
     return new ArrayList<>(allItemsCache.get());
-  }
-
-  public Collection<T> all(String prefix, int maxResults) {
-    return service.loadObjectsWithPrefix(objectType, prefix, maxResults);
   }
 
   public Collection<T> history(String id, int maxResults) {
@@ -288,15 +260,7 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
     Long refreshTime = System.currentTimeMillis();
     Long lastModified = existingItems.isEmpty() ? 0L : readLastModified();
 
-    Map<String, Long> keyUpdateTime;
-    try {
-      keyUpdateTime = objectKeysByLastModifiedCache.get(lastModified);
-    } catch (ExecutionException e) {
-      log.error("Error fetching object keys from cache (lastModified: {})", new Date(lastModified), e);
-      keyUpdateTime = service.listObjectKeys(objectType);
-    }
-
-    log.debug(objectKeysByLastModifiedCache.stats().toString());
+    Map<String, Long> keyUpdateTime = service.listObjectKeys(objectType);
 
     // Expanded from a stream collector to avoid DuplicateKeyExceptions
     Map<String, T> resultMap = new HashMap<>();
@@ -306,7 +270,13 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
           log.error(String.format("Duplicate item id found, last-write wins: (id: %s)", item.getId()));
         }
         resultMap.put(item.getId(), item);
+      } else {
+        log.info("Missing key for {}", buildObjectKey(item));
       }
+    }
+
+    if (objectType == ObjectType.APPLICATION) {
+      log.info("------------");
     }
 
     List<Map.Entry<String, Long>> modifiedKeys = keyUpdateTime
@@ -315,11 +285,13 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
         .filter(entry -> {
           T existingItem = resultMap.get(entry.getKey());
           if (existingItem == null) {
+//            log.info("A");
             numAdded.getAndIncrement();
             return true;
           }
           Long modTime = existingItem.getLastModified();
           if (modTime == null || entry.getValue() > modTime) {
+            log.info("B");
             numUpdated.getAndIncrement();
             return true;
           }
@@ -359,6 +331,8 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
 
     Set<T> result = resultMap.values().stream().collect(Collectors.toSet());
     this.lastRefreshedTime.set(refreshTime);
+
+//    log.debug("Set refresh time to {}", refreshTime);
 
     int resultSize = result.size();
     addCounter.increment(numAdded.get());

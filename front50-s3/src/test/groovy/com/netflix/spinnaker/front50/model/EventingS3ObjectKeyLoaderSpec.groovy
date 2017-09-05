@@ -1,5 +1,5 @@
 /*
- * Copyright 2016 Netflix, Inc.
+ * Copyright 2017 Netflix, Inc.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +14,17 @@
  * limitations under the License.
  */
 
+package com.netflix.spinnaker.front50.model
 
-package com.netflix.spinnaker.front50.model.tag
+import spock.lang.Specification;
 
-import com.netflix.spinnaker.front50.model.ItemDAO
-
-interface EntityTagsDAO extends ItemDAO<EntityTags> {
+class EventingS3ObjectKeyLoaderSpec extends Specification {
+  def "should build object key"() {
+    expect:
+    EventingS3ObjectKeyLoader.buildObjectKey(
+      "my/root/",
+      "my/root/tags/aws%3Aservergroup%3Amy_asg-v720/entity-tags-metadata.json"
+    ) == "aws:servergroup:my_asg-v720"
+  }
 }
+

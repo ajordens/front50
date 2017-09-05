@@ -26,6 +26,9 @@ public class S3Properties extends S3BucketProperties {
   @NestedConfigurationProperty
   S3FailoverProperties failover = new S3FailoverProperties();
 
+  @NestedConfigurationProperty
+  S3NotificationProperties notifications = new S3NotificationProperties();
+
   public String getRootFolder() {
     return rootFolder;
   }
@@ -44,6 +47,18 @@ public class S3Properties extends S3BucketProperties {
 
   public boolean isFailoverEnabled() {
     return failover != null && failover.enabled;
+  }
+
+  public S3NotificationProperties getNotifications() {
+    return notifications;
+  }
+
+  public void setNotifications(S3NotificationProperties notifications) {
+    this.notifications = notifications;
+  }
+
+  public boolean areNotificationsEnabled() {
+    return notifications != null && notifications.snsTopicArn != null;
   }
 
   @Override
