@@ -44,6 +44,8 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
   private final ObjectType objectType;
   private final StorageService service;
   private final Scheduler scheduler;
+  private final ObjectKeyLoader objectKeyLoader;
+
   private final long refreshIntervalMs;
   private final boolean shouldWarmCache;
   private final Registry registry;
@@ -59,12 +61,14 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
   public StorageServiceSupport(ObjectType objectType,
                                StorageService service,
                                Scheduler scheduler,
+                               ObjectKeyLoader objectKeyLoader,
                                long refreshIntervalMs,
                                boolean shouldWarmCache,
                                Registry registry) {
     this.objectType = objectType;
     this.service = service;
     this.scheduler = scheduler;
+    this.objectKeyLoader = objectKeyLoader;
     this.refreshIntervalMs = refreshIntervalMs;
     if (refreshIntervalMs >= getHealthMillis()) {
       throw new IllegalArgumentException("Cache refresh time must be more frequent than cache health timeout");
@@ -260,7 +264,7 @@ public abstract class StorageServiceSupport<T extends Timestamped> {
     Long refreshTime = System.currentTimeMillis();
     Long lastModified = existingItems.isEmpty() ? 0L : readLastModified();
 
-    Map<String, Long> keyUpdateTime = service.listObjectKeys(objectType);
+    Map<String, Long> keyUpdateTime = objectKeyLoader.listObjectKeys(objectType);
 
     // Expanded from a stream collector to avoid DuplicateKeyExceptions
     Map<String, T> resultMap = new HashMap<>();

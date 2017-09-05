@@ -57,10 +57,6 @@ public class S3Properties extends S3BucketProperties {
     this.notifications = notifications;
   }
 
-  public boolean areNotificationsEnabled() {
-    return notifications != null && notifications.snsTopicArn != null;
-  }
-
   @Override
   public String getBucket() {
     if (isFailoverEnabled()) {

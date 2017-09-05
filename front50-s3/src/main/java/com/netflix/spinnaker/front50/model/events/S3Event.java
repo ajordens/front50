@@ -26,7 +26,7 @@ public class S3Event {
 
   public static class S3EventRecord {
     public String eventName;
-
+    public String eventTime;
     public S3Meta s3;
   }
 

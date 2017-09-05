@@ -17,7 +17,17 @@
 package com.netflix.spinnaker.front50.config;
 
 public class S3NotificationProperties {
+  boolean enabled = false;
+
   String snsTopicArn;
+
+  public boolean isEnabled() {
+    return enabled;
+  }
+
+  public void setEnabled(boolean enabled) {
+    this.enabled = enabled;
+  }
 
   public String getSnsTopicArn() {
     return snsTopicArn;

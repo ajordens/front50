@@ -16,7 +16,6 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.netflix.awsobjectmapper.AmazonObjectMapperConfigurer;
 import com.netflix.spinnaker.clouddriver.aws.bastion.BastionConfig;
 import com.netflix.spinnaker.clouddriver.aws.security.AmazonClientProvider;
-import com.netflix.spinnaker.front50.model.DefaultS3ObjectKeyLoader;
 import com.netflix.spinnaker.front50.model.EventingS3ObjectKeyLoader;
 import com.netflix.spinnaker.front50.model.ObjectKeyLoader;
 import com.netflix.spinnaker.front50.model.S3StorageService;
@@ -103,39 +102,34 @@ public class S3Config extends CommonStorageServiceDAOConfig {
   }
 
   @Bean
-  public S3StorageService s3StorageService(TaskScheduler taskScheduler,
-                                           AmazonS3 amazonS3,
-                                           AmazonSQS amazonSQS,
-                                           AmazonSNS amazonSNS,
+  @ConditionalOnExpression("${spinnaker.s3.notifications.enabled:false}")
+  public ObjectKeyLoader eventingS3ObjectKeyLoader(TaskScheduler taskScheduler,
+                                                   ObjectMapper objectMapper,
+                                                   AmazonS3 amazonS3,
+                                                   AmazonSQS amazonSQS,
+                                                   AmazonSNS amazonSNS,
+                                                   S3StorageService s3StorageService,
+                                                   S3Properties s3Properties) {
+    return new EventingS3ObjectKeyLoader(
+      taskScheduler,
+      objectMapper,
+      amazonS3,
+      amazonSQS,
+      amazonSNS,
+      s3Properties,
+      s3StorageService
+    );
+  }
+
+  @Bean
+  public S3StorageService s3StorageService(AmazonS3 amazonS3,
                                            S3Properties s3Properties) {
     ObjectMapper awsObjectMapper = new ObjectMapper();
     AmazonObjectMapperConfigurer.configure(awsObjectMapper);
 
-    ObjectKeyLoader objectKeyLoader = new DefaultS3ObjectKeyLoader(
-      amazonS3,
-      s3Properties.getBucket(),
-      s3Properties.getRootFolder()
-    );
-
-    if (s3Properties.areNotificationsEnabled()) {
-      objectKeyLoader = new EventingS3ObjectKeyLoader(
-        taskScheduler,
-        awsObjectMapper,
-        amazonS3,
-        amazonSQS,
-        amazonSNS,
-        (DefaultS3ObjectKeyLoader) objectKeyLoader,
-        s3Properties.getRootFolder(),
-        s3Properties.getNotifications().getSnsTopicArn()
-      );
-    }
-
     S3StorageService service = new S3StorageService(
       awsObjectMapper,
       amazonS3,
-      amazonSQS,
-      amazonSNS,
-      objectKeyLoader,
       s3Properties.getBucket(),
       s3Properties.getRootFolder(),
       s3Properties.isFailoverEnabled(),

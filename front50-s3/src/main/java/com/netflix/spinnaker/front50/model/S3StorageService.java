@@ -17,19 +17,8 @@
 package com.netflix.spinnaker.front50.model;
 
 import com.amazonaws.AmazonServiceException;
-import com.amazonaws.auth.policy.Condition;
-import com.amazonaws.auth.policy.Policy;
-import com.amazonaws.auth.policy.Principal;
-import com.amazonaws.auth.policy.Resource;
-import com.amazonaws.auth.policy.Statement;
-import com.amazonaws.auth.policy.actions.SQSActions;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.*;
-import com.amazonaws.services.sns.AmazonSNS;
-import com.amazonaws.services.sqs.AmazonSQS;
-import com.amazonaws.services.sqs.model.ReceiptHandleIsInvalidException;
-import com.amazonaws.services.sqs.model.ReceiveMessageRequest;
-import com.amazonaws.services.sqs.model.ReceiveMessageResult;
 import com.amazonaws.util.StringUtils;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,38 +40,23 @@ public class S3StorageService implements StorageService {
 
   private final ObjectMapper objectMapper;
   private final AmazonS3 amazonS3;
-  private final AmazonSQS amazonSQS;
-  private final AmazonSNS amazonSNS;
   private final String bucket;
   private final String rootFolder;
   private final Boolean readOnlyMode;
   private final String region;
 
-  private final ObjectKeyLoader objectKeyLoader;
-
   public S3StorageService(ObjectMapper objectMapper,
                           AmazonS3 amazonS3,
-                          AmazonSQS amazonSQS,
-                          AmazonSNS amazonSNS,
-                          ObjectKeyLoader objectKeyLoader,
                           String bucket,
                           String rootFolder,
                           Boolean readOnlyMode,
                           String region) {
     this.objectMapper = objectMapper;
     this.amazonS3 = amazonS3;
-    this.amazonSQS = amazonSQS;
-    this.amazonSNS = amazonSNS;
-    this.objectKeyLoader = objectKeyLoader;
     this.bucket = bucket;
     this.rootFolder = rootFolder;
     this.readOnlyMode = readOnlyMode;
     this.region = region;
-  }
-
-  @PreDestroy
-  void shutdown() {
-    objectKeyLoader.shutdown();
   }
 
   @Override
@@ -173,7 +147,24 @@ public class S3StorageService implements StorageService {
 
   @Override
   public Map<String, Long> listObjectKeys(ObjectType objectType) {
-    return objectKeyLoader.listObjectKeys(objectType);
+    long startTime = System.currentTimeMillis();
+
+    ObjectListing bucketListing = amazonS3.listObjects(
+      new ListObjectsRequest(bucket, S3StorageService.buildTypedFolder(rootFolder, objectType.group), null, null, 10000)
+    );
+    List<S3ObjectSummary> summaries = bucketListing.getObjectSummaries();
+
+    while (bucketListing.isTruncated()) {
+      bucketListing = amazonS3.listNextBatchOfObjects(bucketListing);
+      summaries.addAll(bucketListing.getObjectSummaries());
+    }
+
+    log.debug("Took {}ms to fetch {} object keys for {}", (System.currentTimeMillis() - startTime), summaries.size(), objectType);
+
+    return summaries
+      .stream()
+      .filter(s -> filterS3ObjectSummary(s, objectType.defaultMetadataFilename))
+      .collect(Collectors.toMap((s -> buildObjectKey(objectType, s.getKey())), (s -> s.getLastModified().getTime())));
   }
 
   @Override
@@ -263,6 +254,16 @@ public class S3StorageService implements StorageService {
     }
 
     return (buildTypedFolder(rootFolder, group) + "/" + objectKey.toLowerCase() + "/" + metadataFilename).replace("//", "/");
+  }
+
+  private String buildObjectKey(ObjectType objectType, String s3Key) {
+    return s3Key
+      .replaceAll(S3StorageService.buildTypedFolder(rootFolder, objectType.group) + "/", "")
+      .replaceAll("/" + objectType.defaultMetadataFilename, "");
+  }
+
+  private boolean filterS3ObjectSummary(S3ObjectSummary s3ObjectSummary, String metadataFilename) {
+    return s3ObjectSummary.getKey().endsWith(metadataFilename);
   }
 
   static String buildTypedFolder(String rootFolder, String type) {

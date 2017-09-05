@@ -18,10 +18,15 @@ package com.netflix.spinnaker.front50.model;
 
 import java.util.Map;
 
-public interface ObjectKeyLoader {
-  Map<String, Long> listObjectKeys(ObjectType objectType);
+public class DefaultObjectKeyLoader implements ObjectKeyLoader {
+  private final StorageService storageService;
 
-  default void shutdown() {
-    // do nothing
+  public DefaultObjectKeyLoader(StorageService storageService) {
+    this.storageService = storageService;
+  }
+
+  @Override
+  public Map<String, Long> listObjectKeys(ObjectType objectType) {
+    return storageService.listObjectKeys(objectType);
   }
 }
